@@ -1,0 +1,69 @@
+name: tubesnap
+description: A premium YouTube video downloader app with multi-quality support.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State Management
+  provider: ^6.1.1
+
+  # Storage
+  shared_preferences: ^2.2.2
+  path_provider: ^2.1.1
+
+  # UI Components
+  google_fonts: ^8.0.1
+  flutter_screenutil: ^5.9.0
+  shimmer: ^3.0.0
+  lottie: ^3.3.2
+  percent_indicator: ^4.2.3
+  cached_network_image: ^3.3.0
+  flutter_svg: ^2.0.9
+
+  # Utilities
+  intl: ^0.20.1
+  url_launcher: ^6.2.2
+  share_plus: ^12.0.1
+  permission_handler: ^12.0.1
+  connectivity_plus: ^7.0.0
+  open_filex: ^4.5.0
+
+  # Media Players
+  video_player: ^2.9.2
+  chewie: ^1.8.5
+  just_audio: ^0.10.5
+  audio_video_progress_bar: ^2.0.3
+  rxdart: ^0.28.0
+
+  # Audio Conversion (for MP3)
+  ffmpeg_kit_flutter_new: ^4.1.0
+
+  # For actual YouTube downloading (backend)
+  youtube_explode_dart: ^3.0.5
+  dio: ^5.4.0
+
+  # Icons
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.7
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/lang/
+    - assets/animations/
