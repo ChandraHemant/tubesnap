@@ -1,12 +1,42 @@
+/// Settings Screen
+/// Developer: Hemant Kumar Chandra
+///
+/// A comprehensive settings screen for managing app preferences including
+/// theme, language, download settings, notifications, storage management,
+/// and app information.
+library settings_screen;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart' as share_plus;
+import 'package:url_launcher/url_launcher.dart';
 import '../core/utils/responsive.dart';
 import '../l10n/app_localizations.dart';
 import '../providers/theme_provider.dart';
 import '../providers/language_provider.dart';
+import '../providers/settings_provider.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  late Future<PackageInfo> _packageInfo;
+  late Future<Map<String, int>> _storageInfo;
+  late Future<int> _cacheSize;
+
+  @override
+  void initState() {
+    super.initState();
+    _packageInfo = PackageInfo.fromPlatform();
+    final settingsProvider = context.read<SettingsProvider>();
+    _storageInfo = settingsProvider.getStorageInfo();
+    _cacheSize = settingsProvider.getCacheSize();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -14,6 +44,7 @@ class SettingsScreen extends StatelessWidget {
     final responsive = Responsive(context);
     final themeProvider = Provider.of<ThemeProvider>(context);
     final langProvider = Provider.of<LanguageProvider>(context);
+    final settingsProvider = Provider.of<SettingsProvider>(context);
 
     return Scaffold(
       body: SafeArea(
@@ -56,7 +87,7 @@ class SettingsScreen extends StatelessWidget {
                           trailing: Switch.adaptive(
                             value: themeProvider.isDark,
                             onChanged: (_) => themeProvider.toggleTheme(),
-                            activeColor: theme.colorScheme.primary,
+                            activeThumbColor: theme.colorScheme.primary,
                           ),
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline, indent: 70),
@@ -73,7 +104,7 @@ class SettingsScreen extends StatelessWidget {
                               vertical: responsive.rs(6),
                             ),
                             decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withOpacity(0.1),
+                              color: theme.colorScheme.primary.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(responsive.rs(8)),
                             ),
                             child: DropdownButtonHideUnderline(
@@ -144,8 +175,8 @@ class SettingsScreen extends StatelessWidget {
                           icon: Icons.folder_rounded,
                           iconColor: const Color(0xFFF59E0B),
                           title: context.tr('settings.download_location'),
-                          subtitle: '/storage/emulated/0/TubeSnap',
-                          onTap: () => _showLocationPicker(context),
+                          subtitle: settingsProvider.downloadPath ?? '/storage/emulated/0/Download/TubeSnap',
+                          onTap: () => _showLocationPicker(context, settingsProvider),
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline, indent: 70),
 
@@ -154,8 +185,8 @@ class SettingsScreen extends StatelessWidget {
                           icon: Icons.high_quality_rounded,
                           iconColor: const Color(0xFF8B5CF6),
                           title: context.tr('settings.default_quality'),
-                          subtitle: '1080p - Full HD',
-                          onTap: () => _showQualityPicker(context, theme, responsive),
+                          subtitle: _getQualityLabel(settingsProvider.defaultQuality),
+                          onTap: () => _showQualityPicker(context, theme, responsive, settingsProvider),
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline, indent: 70),
 
@@ -166,9 +197,9 @@ class SettingsScreen extends StatelessWidget {
                           title: context.tr('settings.wifi_only'),
                           subtitle: context.tr('settings.wifi_only_desc'),
                           trailing: Switch.adaptive(
-                            value: true,
-                            onChanged: (_) {},
-                            activeColor: theme.colorScheme.primary,
+                            value: settingsProvider.wifiOnly,
+                            onChanged: (value) => settingsProvider.setWifiOnly(value),
+                            activeThumbColor: theme.colorScheme.primary,
                           ),
                         ),
                       ],
@@ -191,9 +222,9 @@ class SettingsScreen extends StatelessWidget {
                       title: context.tr('settings.notify_complete'),
                       subtitle: context.tr('settings.notify_complete_desc'),
                       trailing: Switch.adaptive(
-                        value: true,
-                        onChanged: (_) {},
-                        activeColor: theme.colorScheme.primary,
+                        value: settingsProvider.notifications,
+                        onChanged: (value) => settingsProvider.setNotifications(value),
+                        activeThumbColor: theme.colorScheme.primary,
                       ),
                     ),
                   ),
@@ -211,51 +242,80 @@ class SettingsScreen extends StatelessWidget {
                     child: Column(
                       children: [
                         // Storage Usage
-                        Padding(
-                          padding: EdgeInsets.all(responsive.rs(16)),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        FutureBuilder<Map<String, int>>(
+                          future: _storageInfo,
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return Padding(
+                                padding: EdgeInsets.all(responsive.rs(16)),
+                                child: const CircularProgressIndicator(),
+                              );
+                            }
+
+                            final used = snapshot.data!['used'] ?? 0;
+                            final free = snapshot.data!['free'] ?? 0;
+                            final total = used + free;
+                            final percentage = total > 0 ? used / total : 0.0;
+
+                            final usedGB = (used / (1024 * 1024 * 1024)).toStringAsFixed(1);
+                            final freeGB = (free / (1024 * 1024 * 1024)).toStringAsFixed(1);
+
+                            return Padding(
+                              padding: EdgeInsets.all(responsive.rs(16)),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    'Used: 2.4 GB',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                      color: theme.colorScheme.onSurface,
-                                    ),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        'Used: $usedGB GB',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          color: theme.colorScheme.onSurface,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Free: $freeGB GB',
+                                        style: TextStyle(
+                                          color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  Text(
-                                    'Free: 12.6 GB',
-                                    style: TextStyle(
-                                      color: theme.colorScheme.onSurface.withOpacity(0.6),
+                                  SizedBox(height: responsive.rs(12)),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(responsive.rs(8)),
+                                    child: LinearProgressIndicator(
+                                      value: percentage.clamp(0.0, 1.0),
+                                      backgroundColor: theme.colorScheme.outline,
+                                      valueColor: AlwaysStoppedAnimation(theme.colorScheme.primary),
+                                      minHeight: responsive.rs(8),
                                     ),
                                   ),
                                 ],
                               ),
-                              SizedBox(height: responsive.rs(12)),
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(responsive.rs(8)),
-                                child: LinearProgressIndicator(
-                                  value: 0.16,
-                                  backgroundColor: theme.colorScheme.outline,
-                                  valueColor: AlwaysStoppedAnimation(theme.colorScheme.primary),
-                                  minHeight: responsive.rs(8),
-                                ),
-                              ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline),
 
                         // Clear Cache
-                        _SettingsTile(
-                          icon: Icons.cleaning_services_rounded,
-                          iconColor: const Color(0xFF06B6D4),
-                          title: context.tr('settings.clear_cache'),
-                          subtitle: '128 MB',
-                          onTap: () => _showClearCacheDialog(context, theme, responsive),
+                        FutureBuilder<int>(
+                          future: _cacheSize,
+                          builder: (context, snapshot) {
+                            final cacheSizeMB = snapshot.hasData
+                                ? (snapshot.data! / (1024 * 1024)).toStringAsFixed(1)
+                                : 'Calculating...';
+
+                            return _SettingsTile(
+                              icon: Icons.cleaning_services_rounded,
+                              iconColor: const Color(0xFF06B6D4),
+                              title: context.tr('settings.clear_cache'),
+                              subtitle: '$cacheSizeMB MB',
+                              onTap: () => _showClearCacheDialog(context, theme, responsive, settingsProvider),
+                            );
+                          },
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline, indent: 70),
 
@@ -265,7 +325,7 @@ class SettingsScreen extends StatelessWidget {
                           iconColor: const Color(0xFFEC4899),
                           title: context.tr('settings.clear_history'),
                           subtitle: context.tr('settings.clear_history_desc'),
-                          onTap: () => _showClearHistoryDialog(context, theme, responsive),
+                          onTap: () => _showClearHistoryDialog(context, theme, responsive, settingsProvider),
                         ),
                       ],
                     ),
@@ -287,35 +347,43 @@ class SettingsScreen extends StatelessWidget {
                           icon: Icons.star_rounded,
                           iconColor: const Color(0xFFF59E0B),
                           title: context.tr('settings.rate_app'),
-                          onTap: () {},
+                          onTap: () => _launchPlayStore(),
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline, indent: 70),
                         _SettingsTile(
                           icon: Icons.share_rounded,
                           iconColor: const Color(0xFF10B981),
                           title: context.tr('settings.share_app'),
-                          onTap: () {},
+                          onTap: () => _shareApp(),
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline, indent: 70),
                         _SettingsTile(
                           icon: Icons.privacy_tip_rounded,
                           iconColor: const Color(0xFF6366F1),
                           title: context.tr('settings.privacy_policy'),
-                          onTap: () {},
+                          onTap: () => _launchURL('https://tubesnap.example.com/privacy'),
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline, indent: 70),
                         _SettingsTile(
                           icon: Icons.description_rounded,
                           iconColor: const Color(0xFF8B5CF6),
                           title: context.tr('settings.terms_of_service'),
-                          onTap: () {},
+                          onTap: () => _launchURL('https://tubesnap.example.com/terms'),
                         ),
                         Divider(height: 1, color: theme.colorScheme.outline, indent: 70),
-                        _SettingsTile(
-                          icon: Icons.info_outline_rounded,
-                          iconColor: const Color(0xFF64748B),
-                          title: context.tr('settings.version'),
-                          subtitle: '1.0.0 (Build 1)',
+                        FutureBuilder<PackageInfo>(
+                          future: _packageInfo,
+                          builder: (context, snapshot) {
+                            final version = snapshot.hasData ? snapshot.data!.version : '1.0.0';
+                            final buildNumber = snapshot.hasData ? snapshot.data!.buildNumber : '1';
+
+                            return _SettingsTile(
+                              icon: Icons.info_outline_rounded,
+                              iconColor: const Color(0xFF64748B),
+                              title: context.tr('settings.version'),
+                              subtitle: '$version (Build $buildNumber)',
+                            );
+                          },
                         ),
                       ],
                     ),
@@ -357,7 +425,16 @@ class SettingsScreen extends StatelessWidget {
                           'Made with ❤️ in India',
                           style: TextStyle(
                             fontSize: responsive.sp(12),
-                            color: theme.colorScheme.onSurface.withOpacity(0.6),
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                          ),
+                        ),
+                        SizedBox(height: responsive.rs(4)),
+                        Text(
+                          'Developer: Hemant Kumar Chandra',
+                          style: TextStyle(
+                            fontSize: responsive.sp(11),
+                            fontWeight: FontWeight.w500,
+                            color: theme.colorScheme.primary,
                           ),
                         ),
                         SizedBox(height: responsive.rs(16)),
@@ -366,11 +443,26 @@ class SettingsScreen extends StatelessWidget {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            _buildSocialButton(theme, responsive, Icons.language, () {}),
+                            _buildSocialButton(
+                              theme,
+                              responsive,
+                              Icons.language,
+                              () => _launchURL('https://tubesnap.example.com'),
+                            ),
                             SizedBox(width: responsive.rs(12)),
-                            _buildSocialButton(theme, responsive, Icons.mail_rounded, () {}),
+                            _buildSocialButton(
+                              theme,
+                              responsive,
+                              Icons.mail_rounded,
+                              () => _launchEmail('support@tubesnap.example.com'),
+                            ),
                             SizedBox(width: responsive.rs(12)),
-                            _buildSocialButton(theme, responsive, Icons.code_rounded, () {}),
+                            _buildSocialButton(
+                              theme,
+                              responsive,
+                              Icons.code_rounded,
+                              () => _launchURL('https://github.com/tubesnap'),
+                            ),
                           ],
                         ),
                       ],
@@ -426,17 +518,56 @@ class SettingsScreen extends StatelessWidget {
         child: Icon(
           icon,
           size: responsive.iconSize(mobile: 20),
-          color: theme.colorScheme.onSurface.withOpacity(0.7),
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
         ),
       ),
     );
   }
 
-  void _showLocationPicker(BuildContext context) {
-    // Implement folder picker
+  void _showLocationPicker(BuildContext context, SettingsProvider settingsProvider) {
+    // Simple path selector dialog
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text(context.tr('settings.download_location')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.folder),
+              title: const Text('/storage/emulated/0/Download/TubeSnap'),
+              onTap: () {
+                settingsProvider.setDownloadPath('/storage/emulated/0/Download/TubeSnap');
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder),
+              title: const Text('/storage/emulated/0/DCIM/TubeSnap'),
+              onTap: () {
+                settingsProvider.setDownloadPath('/storage/emulated/0/DCIM/TubeSnap');
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  void _showQualityPicker(BuildContext context, ThemeData theme, Responsive responsive) {
+  String _getQualityLabel(String quality) {
+    final qualityMap = {
+      '2160p': '2160p - 4K',
+      '1440p': '1440p - 2K',
+      '1080p': '1080p - Full HD',
+      '720p': '720p - HD',
+      '480p': '480p - SD',
+    };
+    return qualityMap[quality] ?? quality;
+  }
+
+  void _showQualityPicker(BuildContext context, ThemeData theme, Responsive responsive, SettingsProvider settingsProvider) {
     showModalBottomSheet(
       context: context,
       backgroundColor: theme.colorScheme.surface,
@@ -457,15 +588,29 @@ class SettingsScreen extends StatelessWidget {
               ),
             ),
             SizedBox(height: responsive.rs(16)),
-            ...['2160p - 4K', '1440p - 2K', '1080p - Full HD', '720p - HD', '480p - SD'].map(
-                  (quality) => ListTile(
-                title: Text(quality),
-                leading: Radio(
-                  value: quality,
-                  groupValue: '1080p - Full HD',
-                  onChanged: (_) => Navigator.pop(context),
+            ...[
+              ('2160p', '2160p - 4K'),
+              ('1440p', '1440p - 2K'),
+              ('1080p', '1080p - Full HD'),
+              ('720p', '720p - HD'),
+              ('480p', '480p - SD'),
+            ].map(
+              (item) => ListTile(
+                title: Text(item.$2),
+                leading: Radio<String>(
+                  value: item.$1,
+                  groupValue: settingsProvider.defaultQuality,
+                  onChanged: (value) {
+                    if (value != null) {
+                      settingsProvider.setDefaultQuality(value);
+                      Navigator.pop(context);
+                    }
+                  },
                 ),
-                onTap: () => Navigator.pop(context),
+                onTap: () {
+                  settingsProvider.setDefaultQuality(item.$1);
+                  Navigator.pop(context);
+                },
               ),
             ),
             SizedBox(height: responsive.rs(16)),
@@ -475,20 +620,29 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  void _showClearCacheDialog(BuildContext context, ThemeData theme, Responsive responsive) {
+  void _showClearCacheDialog(BuildContext context, ThemeData theme, Responsive responsive, SettingsProvider settingsProvider) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(responsive.rs(20))),
         title: Text(context.tr('settings.clear_cache')),
-        content: const Text('Are you sure you want to clear the cache? This will free up 128 MB of storage.'),
+        content: const Text('Are you sure you want to clear the cache? This will free up storage space.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: Text(context.tr('common.cancel')),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              settingsProvider.clearCache();
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: const Text('Cache cleared successfully')),
+              );
+              setState(() {
+                _cacheSize = settingsProvider.getCacheSize();
+              });
+            },
             child: Text(context.tr('common.confirm')),
           ),
         ],
@@ -496,7 +650,7 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  void _showClearHistoryDialog(BuildContext context, ThemeData theme, Responsive responsive) {
+  void _showClearHistoryDialog(BuildContext context, ThemeData theme, Responsive responsive, SettingsProvider settingsProvider) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -509,7 +663,13 @@ class SettingsScreen extends StatelessWidget {
             child: Text(context.tr('common.cancel')),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              settingsProvider.clearHistory();
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: const Text('History cleared successfully')),
+              );
+            },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: Text(context.tr('common.delete')),
           ),
@@ -517,6 +677,36 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _launchURL(String urlString) async {
+    final Uri url = Uri.parse(urlString);
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  Future<void> _launchEmail(String email) async {
+    final Uri emailUri = Uri(
+      scheme: 'mailto',
+      path: email,
+    );
+    if (await canLaunchUrl(emailUri)) {
+      await launchUrl(emailUri);
+    }
+  }
+
+  Future<void> _shareApp() async {
+    await share_plus.Share.share(
+      'Check out TubeSnap - The best YouTube video downloader! Download it now from the Play Store.',
+      subject: 'TubeSnap - Fast YouTube Downloader',
+    );
+  }
+
+  Future<void> _launchPlayStore() async {
+    const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.tubesnap.app';
+    await _launchURL(playStoreUrl);
+  }
+
 }
 
 // ============================================================
@@ -555,7 +745,7 @@ class _SettingsTile extends StatelessWidget {
             Container(
               padding: EdgeInsets.all(responsive.rs(10)),
               decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.1),
+                color: iconColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(responsive.rs(12)),
               ),
               child: Icon(
@@ -585,7 +775,7 @@ class _SettingsTile extends StatelessWidget {
                       subtitle!,
                       style: TextStyle(
                         fontSize: responsive.sp(12),
-                        color: theme.colorScheme.onSurface.withOpacity(0.6),
+                        color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                       ),
                     ),
                   ],
@@ -599,7 +789,7 @@ class _SettingsTile extends StatelessWidget {
             else if (onTap != null)
               Icon(
                 Icons.chevron_right_rounded,
-                color: theme.colorScheme.onSurface.withOpacity(0.4),
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
               ),
           ],
         ),

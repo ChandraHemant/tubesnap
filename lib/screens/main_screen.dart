@@ -1,9 +1,17 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../core/utils/responsive.dart';
 import '../l10n/app_localizations.dart';
 import 'home_screen.dart';
 import 'downloads_screen.dart';
 import 'settings_screen.dart';
+import '../providers/audio_player_provider.dart';
+import '../widgets/common/floating_mini_player.dart';
+import 'audio_player_screen.dart';
+import '../providers/share_intent_provider.dart';
+import '../providers/video_provider.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -14,6 +22,8 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
+  String? _lastProcessedSharedUrl;
+  StreamSubscription<String>? _shareSubscription;
 
   final List<Widget> _screens = const [
     HomeScreen(),
@@ -22,9 +32,64 @@ class _MainScreenState extends State<MainScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    // Listen to shared URL stream so we can react immediately when an intent arrives
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        final sp = Provider.of<ShareIntentProvider>(context, listen: false);
+        final videoProvider = Provider.of<VideoProvider>(context, listen: false);
+        _shareSubscription = sp.sharedUrlStream.listen((url) async {
+          if (url != null && _lastProcessedSharedUrl != url) {
+            _lastProcessedSharedUrl = url;
+            if (kDebugMode) print('MainScreen.sharedUrlStream: received $url');
+            // switch to Home tab
+            if (mounted) setState(() => _currentIndex = 0);
+            try {
+              await videoProvider.fetchVideo(url);
+              sp.markAsProcessed();
+              if (kDebugMode) print('MainScreen.sharedUrlStream: processed $url');
+            } catch (e) {
+              if (kDebugMode) print('MainScreen.sharedUrlStream: failed to fetch $url: $e');
+            }
+          }
+        });
+      } catch (e) {
+        if (kDebugMode) print('MainScreen.initState: failed to subscribe to sharedUrlStream: $e');
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _shareSubscription?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final responsive = Responsive(context);
+
+    final shareProvider = Provider.of<ShareIntentProvider>(context);
+    final videoProvider = Provider.of<VideoProvider>(context, listen: false);
+
+    // If a shared URL arrives before HomeScreen can process it, handle it here once.
+    if (shareProvider.isPending && shareProvider.sharedUrl != null && _lastProcessedSharedUrl != shareProvider.sharedUrl) {
+      _lastProcessedSharedUrl = shareProvider.sharedUrl;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        try {
+          // switch to Home tab
+          setState(() => _currentIndex = 0);
+          // fetch video
+          await videoProvider.fetchVideo(shareProvider.sharedUrl!);
+          shareProvider.markAsProcessed();
+          if (kDebugMode) print('MainScreen: processed shared url ${shareProvider.sharedUrl}');
+        } catch (e) {
+          if (kDebugMode) print('MainScreen: failed to process shared url: $e');
+        }
+      });
+    }
 
     // Desktop/Tablet Layout with Side Navigation
     if (responsive.isDesktop || (responsive.isTablet && responsive.isLandscape)) {
@@ -78,12 +143,45 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     // Mobile/Tablet Portrait Layout with Bottom Navigation
-    return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: _buildBottomNav(theme, responsive),
+    return Consumer<AudioPlayerProvider>(
+      builder: (context, audioProvider, child) {
+        return WillPopScope(
+          onWillPop: () async => false,
+          child: Scaffold(
+            body: Stack(
+              children: [
+                IndexedStack(
+                  index: _currentIndex,
+                  children: _screens,
+                ),
+
+                // Floating mini player shown when audio is loaded
+                if (audioProvider.isInitialized && audioProvider.currentAudioPath != null)
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: 76, // above bottom nav
+                    child: FloatingMiniPlayer(
+                      onTap: () {
+                        // Open the full audio player screen
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => AudioPlayerScreen(
+                              audioPath: audioProvider.currentAudioPath!,
+                              audioTitle: audioProvider.currentAudioTitle ?? 'Playing',
+                              thumbnailUrl: audioProvider.currentThumbnailUrl,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+            bottomNavigationBar: _buildBottomNav(theme, responsive),
+          ),
+        );
+      },
     );
   }
 

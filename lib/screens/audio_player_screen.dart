@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_video_progress_bar/audio_video_progress_bar.dart';
 import 'package:rxdart/rxdart.dart';
+import 'package:provider/provider.dart';
 import '../core/utils/responsive.dart';
+import '../providers/audio_player_provider.dart';
 
 class AudioPlayerScreen extends StatefulWidget {
   final String audioPath;
@@ -23,7 +25,6 @@ class AudioPlayerScreen extends StatefulWidget {
 
 class _AudioPlayerScreenState extends State<AudioPlayerScreen>
     with TickerProviderStateMixin {
-  late AudioPlayer _audioPlayer;
   bool _isInitialized = false;
   String? _errorMessage;
   late AnimationController _rotationController;
@@ -31,7 +32,6 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
   @override
   void initState() {
     super.initState();
-    _audioPlayer = AudioPlayer();
     _rotationController = AnimationController(
       duration: const Duration(seconds: 20),
       vsync: this,
@@ -49,22 +49,30 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
         return;
       }
 
+      final audioProvider = Provider.of<AudioPlayerProvider>(context, listen: false);
+
       // Listen to player state to control rotation
-      _audioPlayer.playerStateStream.listen((state) {
-        if (state.playing) {
-          _rotationController.repeat();
-        } else {
-          _rotationController.stop();
+      audioProvider.audioPlayer.playerStateStream.listen((state) {
+        if (mounted) {
+          if (state.playing) {
+            _rotationController.repeat();
+          } else {
+            _rotationController.stop();
+          }
         }
       });
 
       // Set initialized to true BEFORE loading so UI shows immediately
       setState(() {
         _isInitialized = true;
+        _errorMessage = null;
       });
 
-      await _audioPlayer.setFilePath(widget.audioPath);
-      await _audioPlayer.play();
+      await audioProvider.loadAndPlayAudio(
+        audioPath: widget.audioPath,
+        audioTitle: widget.audioTitle,
+        thumbnailUrl: widget.thumbnailUrl,
+      );
     } catch (e) {
       setState(() {
         _errorMessage = 'Failed to load audio: $e';
@@ -75,25 +83,27 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
 
   @override
   void dispose() {
-    _audioPlayer.dispose();
     _rotationController.dispose();
     super.dispose();
   }
 
-  Stream<PositionData> get _positionDataStream =>
-      Rx.combineLatest3<Duration, Duration, Duration?, PositionData>(
-        _audioPlayer.positionStream,
-        _audioPlayer.bufferedPositionStream,
-        _audioPlayer.durationStream,
-        (position, bufferedPosition, duration) => PositionData(
-          position,
-          bufferedPosition,
-          duration ?? Duration.zero,
-        ),
-      );
+  Stream<PositionData> get _positionDataStream {
+    final audioProvider = Provider.of<AudioPlayerProvider>(context, listen: false);
+    return Rx.combineLatest3<Duration, Duration, Duration?, PositionData>(
+      audioProvider.audioPlayer.positionStream,
+      audioProvider.audioPlayer.bufferedPositionStream,
+      audioProvider.audioPlayer.durationStream,
+      (position, bufferedPosition, duration) => PositionData(
+        position,
+        bufferedPosition,
+        duration ?? Duration.zero,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final audioProvider = Provider.of<AudioPlayerProvider>(context);
     final theme = Theme.of(context);
     final responsive = Responsive(context);
 
@@ -114,10 +124,10 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
           child: Center(
             child: ConstrainedBox(
               constraints: BoxConstraints(maxWidth: responsive.contentMaxWidth),
-              child: _errorMessage != null
-                  ? _buildErrorWidget(theme, responsive)
-                  : _isInitialized
-                      ? _buildPlayerWidget(theme, responsive)
+              child: (_errorMessage != null) || audioProvider.hasError
+                  ? _buildErrorWidget(context, audioProvider, theme, responsive)
+                  : (_isInitialized || audioProvider.isInitialized)
+                      ? _buildPlayerWidget(context, audioProvider, theme, responsive)
                       : _buildLoadingWidget(),
             ),
           ),
@@ -126,7 +136,8 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
     );
   }
 
-  Widget _buildErrorWidget(ThemeData theme, Responsive responsive) {
+  Widget _buildErrorWidget(BuildContext context, AudioPlayerProvider audioProvider, ThemeData theme, Responsive responsive) {
+    final message = _errorMessage ?? audioProvider.errorMessage ?? 'Error loading audio';
     return Padding(
       padding: responsive.screenPadding,
       child: Column(
@@ -139,7 +150,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
           ),
           SizedBox(height: responsive.rs(24)),
           Text(
-            _errorMessage!,
+            message,
             style: TextStyle(
               color: Colors.white,
               fontSize: responsive.sp(16),
@@ -167,7 +178,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
     );
   }
 
-  Widget _buildPlayerWidget(ThemeData theme, Responsive responsive) {
+  Widget _buildPlayerWidget(BuildContext context, AudioPlayerProvider audioProvider, ThemeData theme, Responsive responsive) {
     return Padding(
       padding: responsive.screenPadding,
       child: SingleChildScrollView(
@@ -178,14 +189,14 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
               children: [
                 IconButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  icon: const Icon(Icons.keyboard_arrow_down, size: 32),
+                  icon: const Icon(Icons.arrow_back, size: 32),
                   color: Colors.white,
                 ),
               ],
             ),
-        
+
             SizedBox(height: responsive.rs(24)),
-        
+
             // Album Art / Rotating Disc
             RotationTransition(
               turns: _rotationController,
@@ -225,9 +236,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
                 ),
               ),
             ),
-        
+
             SizedBox(height: responsive.rs(48)),
-        
+
             // Title
             Text(
               widget.audioTitle,
@@ -240,9 +251,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-        
+
             SizedBox(height: responsive.rs(12)),
-        
+
             Text(
               'TubeSnap Audio',
               style: TextStyle(
@@ -250,9 +261,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
                 color: Colors.white.withOpacity(0.7),
               ),
             ),
-        
+
             SizedBox(height: responsive.rs(48)),
-        
+
             // Progress Bar
             StreamBuilder<PositionData>(
               stream: _positionDataStream,
@@ -264,7 +275,7 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
                     progress: positionData?.position ?? Duration.zero,
                     buffered: positionData?.bufferedPosition ?? Duration.zero,
                     total: positionData?.duration ?? Duration.zero,
-                    onSeek: _audioPlayer.seek,
+                    onSeek: audioProvider.seek,
                     barHeight: 4,
                     thumbRadius: 8,
                     baseBarColor: Colors.white.withOpacity(0.3),
@@ -279,33 +290,33 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
                 );
               },
             ),
-        
+
             SizedBox(height: responsive.rs(48)),
-        
+
             // Playback Controls
             StreamBuilder<PlayerState>(
-              stream: _audioPlayer.playerStateStream,
+              stream: audioProvider.audioPlayer.playerStateStream,
               builder: (context, snapshot) {
                 final playerState = snapshot.data;
                 final playing = playerState?.playing ?? false;
                 final processingState = playerState?.processingState;
-        
+
                 return Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     // Skip backward 10s
                     IconButton(
                       onPressed: () {
-                        final newPosition = _audioPlayer.position - const Duration(seconds: 10);
-                        _audioPlayer.seek(newPosition < Duration.zero ? Duration.zero : newPosition);
+                        final newPosition = audioProvider.audioPlayer.position - const Duration(seconds: 10);
+                        audioProvider.seek(newPosition < Duration.zero ? Duration.zero : newPosition);
                       },
                       icon: const Icon(Icons.replay_10_rounded),
                       color: Colors.white,
                       iconSize: responsive.iconSize(mobile: 40),
                     ),
-        
+
                     SizedBox(width: responsive.rs(24)),
-        
+
                     // Play/Pause button
                     Container(
                       width: responsive.iconSize(mobile: 72),
@@ -333,9 +344,9 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
                           : IconButton(
                               onPressed: () {
                                 if (playing) {
-                                  _audioPlayer.pause();
+                                  audioProvider.pause();
                                 } else {
-                                  _audioPlayer.play();
+                                  audioProvider.play();
                                 }
                               },
                               icon: Icon(
@@ -345,15 +356,15 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
                               color: theme.colorScheme.primary,
                             ),
                     ),
-        
+
                     SizedBox(width: responsive.rs(24)),
-        
+
                     // Skip forward 10s
                     IconButton(
                       onPressed: () {
-                        final duration = _audioPlayer.duration ?? Duration.zero;
-                        final newPosition = _audioPlayer.position + const Duration(seconds: 10);
-                        _audioPlayer.seek(newPosition > duration ? duration : newPosition);
+                        final duration = audioProvider.audioPlayer.duration ?? Duration.zero;
+                        final newPosition = audioProvider.audioPlayer.position + const Duration(seconds: 10);
+                        audioProvider.seek(newPosition > duration ? duration : newPosition);
                       },
                       icon: const Icon(Icons.forward_10_rounded),
                       color: Colors.white,
@@ -363,17 +374,17 @@ class _AudioPlayerScreenState extends State<AudioPlayerScreen>
                 );
               },
             ),
-        
+
             SizedBox(height: responsive.rs(24)),
-        
+
             // Loop button
             StreamBuilder<LoopMode>(
-              stream: _audioPlayer.loopModeStream,
+              stream: audioProvider.audioPlayer.loopModeStream,
               builder: (context, snapshot) {
                 final loopMode = snapshot.data ?? LoopMode.off;
                 return IconButton(
                   onPressed: () {
-                    _audioPlayer.setLoopMode(
+                    audioProvider.setLoopMode(
                       loopMode == LoopMode.off ? LoopMode.one : LoopMode.off,
                     );
                   },

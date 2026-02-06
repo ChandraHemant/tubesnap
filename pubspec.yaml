@@ -32,6 +32,7 @@ dependencies:
   intl: ^0.20.1
   url_launcher: ^6.2.2
   share_plus: ^12.0.1
+  package_info_plus: ^8.0.0
   permission_handler: ^12.0.1
   connectivity_plus: ^7.0.0
   open_filex: ^4.5.0
@@ -42,6 +43,10 @@ dependencies:
   just_audio: ^0.10.5
   audio_video_progress_bar: ^2.0.3
   rxdart: ^0.28.0
+  audio_session: ^0.1.21
+
+  # Share Intent Handling
+  receive_intent: ^0.2.0
 
   # Audio Conversion (for MP3)
   ffmpeg_kit_flutter_new: ^4.1.0
@@ -59,6 +64,26 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   build_runner: ^2.4.7
 
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/logo.jpg"
+  min_sdk_android: 21 # android min sdk min:16, default 21
+  web:
+    generate: true
+    image_path: "assets/images/logo.jpg"
+    background_color: "#hexcode"
+    theme_color: "#hexcode"
+  windows:
+    generate: true
+    image_path: "assets/images/logo.jpg"
+    icon_size: 48 # min:48, max:256, default: 48
+  macos:
+    generate: true
+    image_path: "assets/images/logo.jpg"
+    
 flutter:
   uses-material-design: true
 

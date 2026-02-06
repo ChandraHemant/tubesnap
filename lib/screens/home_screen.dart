@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -10,6 +13,7 @@ import '../providers/download_provider.dart';
 import '../widgets/home/free_features_banner.dart';
 import '../widgets/home/video_preview_card.dart';
 import '../models/quality_model.dart';
+import '../providers/share_intent_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,6 +25,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final TextEditingController _urlController = TextEditingController();
   late AnimationController _animController;
+  String? _lastProcessedSharedUrl;
 
   @override
   void initState() {
@@ -29,19 +34,79 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
+
+    // Also register a provider listener to catch share intents that arrive after
+    // the screen is created. We schedule the addListener in post-frame so context
+    // and providers are safe to use.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      try {
+        final shareProvider = Provider.of<ShareIntentProvider>(context, listen: false);
+        final videoProvider = Provider.of<VideoProvider>(context, listen: false);
+        // Listener will check for pending shared urls and handle them once
+        shareProvider.addListener(() {
+          if (shareProvider.isPending && shareProvider.sharedUrl != null && _lastProcessedSharedUrl != shareProvider.sharedUrl) {
+            if (kDebugMode) print('HomeScreen.shareListener: detected pending shared url: ${shareProvider.sharedUrl}');
+            _lastProcessedSharedUrl = shareProvider.sharedUrl;
+            // Use microtask to avoid modifying state during listener callback
+            scheduleMicrotask(() {
+              _handleSharedUrl(shareProvider.sharedUrl!, videoProvider, shareProvider);
+            });
+          }
+        });
+      } catch (e) {
+        if (kDebugMode) print('HomeScreen.initState: failed to register share listener: $e');
+      }
+    });
   }
 
   @override
   void dispose() {
     _urlController.dispose();
     _animController.dispose();
+
+    // nothing extra to dispose for share handling; we track last processed URL
+
     super.dispose();
+  }
+
+  Future<void> _handleSharedUrl(String url, VideoProvider videoProvider, ShareIntentProvider shareProvider) async {
+    if (kDebugMode) {
+      print('HomeScreen._handleSharedUrl: received shared url: $url');
+    }
+    // Prefill the URL field and fetch the video details
+    _urlController.text = url;
+    shareProvider.setProcessing(true);
+    try {
+      if (kDebugMode) print('HomeScreen._handleSharedUrl: starting fetchVideo for $url');
+      await videoProvider.fetchVideo(url);
+      if (kDebugMode) print('HomeScreen._handleSharedUrl: fetchVideo completed for $url');
+    } catch (e) {
+      if (kDebugMode) print('HomeScreen._handleSharedUrl: fetchVideo failed for $url: $e');
+    } finally {
+      shareProvider.markAsProcessed();
+      shareProvider.setProcessing(false);
+      if (kDebugMode) print('HomeScreen._handleSharedUrl: shareProvider marked processed for $url');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final responsive = Responsive(context);
+    final shareProvider = Provider.of<ShareIntentProvider>(context);
+    final videoProvider = Provider.of<VideoProvider>(context, listen: false);
+
+    // If there's a pending shared URL that we haven't processed yet, schedule a post-frame
+    // callback to handle it once (avoid calling during build).
+    if (shareProvider.isPending && shareProvider.sharedUrl != null && _lastProcessedSharedUrl != shareProvider.sharedUrl) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        // double-check still pending
+        if (shareProvider.isPending && shareProvider.sharedUrl != null && _lastProcessedSharedUrl != shareProvider.sharedUrl) {
+          _lastProcessedSharedUrl = shareProvider.sharedUrl;
+          _handleSharedUrl(shareProvider.sharedUrl!, videoProvider, shareProvider);
+        }
+      });
+    }
 
     return Scaffold(
       body: SafeArea(
@@ -608,3 +673,4 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 }
+

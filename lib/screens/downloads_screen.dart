@@ -413,7 +413,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> with SingleTickerProv
                     overflow: TextOverflow.ellipsis,
                   ),
                   SizedBox(height: responsive.rs(8)),
-                  Row(
+                  Wrap(
                     children: [
                       _buildInfoChip(theme, responsive, Icons.high_quality_rounded, quality),
                       SizedBox(width: responsive.rs(8)),
