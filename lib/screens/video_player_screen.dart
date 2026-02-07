@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:chewie/chewie.dart';
 import 'package:video_player/video_player.dart';
+import 'package:share_plus/share_plus.dart' as share_plus;
 import '../core/utils/responsive.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
@@ -24,6 +26,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   ChewieController? _chewieController;
   bool _isInitialized = false;
   String? _errorMessage;
+  bool _showOverlay = false;
+  Timer? _overlayTimer;
 
   @override
   void initState() {
@@ -43,6 +47,28 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
       _videoPlayerController = VideoPlayerController.file(file);
       await _videoPlayerController.initialize();
+
+      // Auto-rotate based on video resolution: landscape if width >= height, portrait otherwise.
+      try {
+        final size = _videoPlayerController.value.size;
+        if (size.width > 0 && size.height > 0) {
+          if (size.width >= size.height) {
+            // Lock to landscape for wide videos
+            await SystemChrome.setPreferredOrientations([
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]);
+          } else {
+            // Lock to portrait for tall videos
+            await SystemChrome.setPreferredOrientations([
+              DeviceOrientation.portraitUp,
+              DeviceOrientation.portraitDown,
+            ]);
+          }
+        }
+      } catch (_) {
+        // Ignore orientation errors and continue
+      }
 
       _chewieController = ChewieController(
         videoPlayerController: _videoPlayerController,
@@ -90,10 +116,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   void dispose() {
     _videoPlayerController.dispose();
     _chewieController?.dispose();
-    // Reset orientation when leaving
+    _overlayTimer?.cancel();
+    // Restore all orientations when leaving so app can rotate normally again
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
     ]);
     super.dispose();
   }
@@ -103,18 +132,22 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     final theme = Theme.of(context);
     final responsive = Responsive(context);
 
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+
     return Scaffold(
       backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        title: Text(
-          widget.videoTitle,
-          style: const TextStyle(color: Colors.white),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
+      appBar: isLandscape
+          ? null
+          : AppBar(
+              backgroundColor: Colors.black,
+              title: Text(
+                widget.videoTitle,
+                style: const TextStyle(color: Colors.white),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              iconTheme: const IconThemeData(color: Colors.white),
+            ),
       body: Center(
         child: _errorMessage != null
             ? Padding(
@@ -150,7 +183,88 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 ),
               )
             : _isInitialized && _chewieController != null
-                ? Chewie(controller: _chewieController!)
+                ? Stack(
+                    children: [
+                      // Player
+                      Positioned.fill(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            // Toggle overlay title
+                            setState(() {
+                              _showOverlay = !_showOverlay;
+                            });
+                            // Auto hide after 3 seconds
+                            _overlayTimer?.cancel();
+                            if (_showOverlay) {
+                              _overlayTimer = Timer(const Duration(seconds: 3), () {
+                                if (mounted) setState(() => _showOverlay = false);
+                              });
+                            }
+                          },
+                          child: Chewie(controller: _chewieController!),
+                        ),
+                      ),
+
+                      // Top overlay bar (only in landscape): title left, action buttons right
+                      if (isLandscape)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: 0,
+                          child: SafeArea(
+                            child: AnimatedOpacity(
+                              opacity: _showOverlay ? 1.0 : 0.0,
+                              duration: const Duration(milliseconds: 200),
+                              child: Container(
+                                color: Colors.black45,
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                child: Row(
+                                  children: [
+                                    // Title on the left
+                                    Expanded(
+                                      child: Text(
+                                        widget.videoTitle,
+                                        style: TextStyle(color: Colors.white, fontSize: responsive.sp(16)),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+
+                                    // Action buttons on the right
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          tooltip: 'Close',
+                                          onPressed: () {
+                                            Navigator.of(context).pop();
+                                          },
+                                          icon: const Icon(Icons.close, color: Colors.white),
+                                        ),
+                                        IconButton(
+                                          tooltip: 'Share',
+                                          onPressed: () async {
+                                            // Share the file path or title
+                                            try {
+                                              final params = share_plus.ShareParams(text: widget.videoPath, subject: widget.videoTitle);
+                                              await share_plus.SharePlus.instance.share(params);
+                                            } catch (_) {
+                                              // ignore
+                                            }
+                                          },
+                                          icon: const Icon(Icons.share, color: Colors.white),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  )
                 : const Center(
                     child: CircularProgressIndicator(color: Colors.white),
                   ),

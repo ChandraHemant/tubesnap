@@ -105,6 +105,26 @@
     "made_with_love": "Made with ❤️ in India"
   },
 
+  "premium": {
+    "title": "Premium",
+    "subtitle": "Unlock extra features and priority support",
+    "feature_1": "All Features Unlocked",
+    "feature_2": "No Restrictions",
+    "feature_3": "High Quality Downloads",
+    "feature_4": "Priority Support",
+    "feature_5": "Advanced Tools",
+    "upgrade": "Upgrade",
+    "monthly": "Monthly",
+    "yearly": "Yearly",
+    "save": "Save",
+    "restore": "Restore"
+  },
+
+  "confirm": {
+    "exit_title": "Exit",
+    "exit_message": "Do you really want to exit the app?"
+  },
+
   "free": {
     "title": "All Features Free!",
     "subtitle": "No subscriptions, no hidden costs",

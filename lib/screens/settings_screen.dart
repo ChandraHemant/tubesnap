@@ -16,6 +16,7 @@ import '../providers/theme_provider.dart';
 import '../providers/language_provider.dart';
 import '../providers/settings_provider.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'downloads_player_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -65,6 +66,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       color: theme.colorScheme.onSurface,
                     ),
                   ),
+                  SizedBox(height: responsive.rs(24)),
+
+                  // Downloaded Media Sections (Music & Videos)
+                  _buildDownloadedMediaSection(theme, responsive, settingsProvider),
                   SizedBox(height: responsive.rs(24)),
 
                   // Appearance Section
@@ -594,25 +599,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ('1080p', '1080p - Full HD'),
               ('720p', '720p - HD'),
               ('480p', '480p - SD'),
-            ].map(
-              (item) => ListTile(
+            ].map((item) {
+              final isSelected = settingsProvider.defaultQuality == item.$1;
+              return ListTile(
                 title: Text(item.$2),
-                leading: Radio<String>(
-                  value: item.$1,
-                  groupValue: settingsProvider.defaultQuality,
-                  onChanged: (value) {
-                    if (value != null) {
-                      settingsProvider.setDefaultQuality(value);
-                      Navigator.pop(context);
-                    }
-                  },
+                leading: Icon(
+                  isSelected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+                  color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
                 onTap: () {
                   settingsProvider.setDefaultQuality(item.$1);
                   Navigator.pop(context);
                 },
-              ),
-            ),
+              );
+            }).toList(),
             SizedBox(height: responsive.rs(16)),
           ],
         ),
@@ -696,10 +696,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _shareApp() async {
-    await share_plus.Share.share(
-      'Check out TubeSnap - The best YouTube video downloader! Download it now from the Play Store.',
+    // Use SharePlus.instance.share with ShareParams to follow the newer API
+    final params = share_plus.ShareParams(
+      text: 'Check out TubeSnap - The best YouTube video downloader! Download it now from the Play Store.',
       subject: 'TubeSnap - Fast YouTube Downloader',
     );
+    await share_plus.SharePlus.instance.share(params);
   }
 
   Future<void> _launchPlayStore() async {
@@ -707,12 +709,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _launchURL(playStoreUrl);
   }
 
+  Widget _buildDownloadedMediaSection(ThemeData theme, Responsive responsive, SettingsProvider settingsProvider) {
+    final downloadPath = settingsProvider.downloadPath;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Downloaded Media',
+          style: TextStyle(fontSize: responsive.sp(16), fontWeight: FontWeight.w700, color: theme.colorScheme.onSurface),
+        ),
+        SizedBox(height: responsive.rs(12)),
+
+        // Single Player Tile - opens combined downloads player screen
+        Card(
+          child: ListTile(
+            contentPadding: EdgeInsets.symmetric(horizontal: responsive.rs(16), vertical: responsive.rs(12)),
+            leading: Container(
+              padding: EdgeInsets.all(responsive.rs(10)),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(responsive.rs(12)),
+              ),
+              child: Icon(Icons.play_circle_fill_rounded, color: Theme.of(context).colorScheme.primary, size: responsive.iconSize(mobile: 26)),
+            ),
+            title: Text('Player', style: TextStyle(fontSize: responsive.sp(14), fontWeight: FontWeight.w700)),
+            subtitle: Text(downloadPath ?? '/storage/emulated/0/Download/TubeSnap', style: TextStyle(fontSize: responsive.sp(12))),
+            trailing: Icon(Icons.chevron_right_rounded, color: theme.colorScheme.onSurface.withValues(alpha: 0.4)),
+            onTap: () {
+              Navigator.of(context).push(MaterialPageRoute(builder: (_) => DownloadsPlayerScreen()));
+            },
+          ),
+        ),
+
+        SizedBox(height: responsive.rs(12)),
+
+        // ...existing code (rest of settings page continues) ...
+      ],
+    );
+  }
 }
 
-// ============================================================
-// Settings Tile Widget
-// ============================================================
-
+/// Settings Tile Widget
+///
+/// A reusable widget for displaying individual settings tiles with
+/// an icon, title, subtitle, and optional trailing widget.
 class _SettingsTile extends StatelessWidget {
   final IconData icon;
   final Color iconColor;

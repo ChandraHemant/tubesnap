@@ -155,8 +155,8 @@ class _MainScreenState extends State<MainScreen> {
                   children: _screens,
                 ),
 
-                // Floating mini player shown when audio is loaded
-                if (audioProvider.isInitialized && audioProvider.currentAudioPath != null)
+                // Floating mini player shown when audio is loaded (hide on Home and Settings)
+                if (_currentIndex != 0 && _currentIndex != 2 && audioProvider.isInitialized && audioProvider.currentAudioPath != null)
                   Positioned(
                     left: 16,
                     right: 16,

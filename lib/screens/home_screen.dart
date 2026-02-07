@@ -12,6 +12,7 @@ import '../providers/video_provider.dart';
 import '../providers/download_provider.dart';
 import '../widgets/home/free_features_banner.dart';
 import '../widgets/home/video_preview_card.dart';
+import '../widgets/home/persistent_audio_tile.dart';
 import '../models/quality_model.dart';
 import '../providers/share_intent_provider.dart';
 
@@ -129,7 +130,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             constraints: BoxConstraints(maxWidth: responsive.contentMaxWidth),
             child: Consumer2<VideoProvider, DownloadProvider>(
               builder: (context, videoProvider, downloadProvider, child) {
-                return SingleChildScrollView(
+                // Make top area (header/banner/tile) fixed and rest scrollable
+                return Padding(
                   padding: responsive.screenPadding,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -138,34 +140,49 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       SizedBox(height: responsive.rs(24)),
 
                       // FREE Features Banner (No Premium!)
-                      const FreeFeaturesBanner(),
-                      SizedBox(height: responsive.rs(24)),
+                      // const FreeFeaturesBanner(),
+                      // SizedBox(height: responsive.rs(12)),
 
-                      // URL Input Section
-                      _buildUrlInputSection(theme, responsive, videoProvider),
-                      SizedBox(height: responsive.rs(20)),
+                      // Persistent Audio Tile fixed below banner
+                      const PersistentAudioTile(),
+                      SizedBox(height: responsive.rs(18)),
 
-                      // Video Preview & Quality Selector
-                      if (videoProvider.hasVideo) ...[
-                        VideoPreviewCard(
-                          title: videoProvider.currentVideo!.title,
-                          channelName: videoProvider.currentVideo!.channelName,
-                          duration: videoProvider.currentVideo!.formattedDuration,
-                          views: videoProvider.currentVideo!.formattedViews,
-                          thumbnailUrl: videoProvider.currentVideo!.thumbnailUrl,
+                      // Rest of the page scrolls
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // URL Input Section
+                              _buildUrlInputSection(theme, responsive, videoProvider),
+                              SizedBox(height: responsive.rs(20)),
+
+                              // Video Preview & Quality Selector
+                              if (videoProvider.hasVideo) ...[
+                                VideoPreviewCard(
+                                  title: videoProvider.currentVideo!.title,
+                                  channelName: videoProvider.currentVideo!.channelName,
+                                  duration: videoProvider.currentVideo!.formattedDuration,
+                                  views: videoProvider.currentVideo!.formattedViews,
+                                  thumbnailUrl: videoProvider.currentVideo!.thumbnailUrl,
+                                ),
+                                SizedBox(height: responsive.rs(20)),
+
+                                _buildQualitySection(theme, responsive, videoProvider),
+                                SizedBox(height: responsive.rs(20)),
+
+                                _buildDownloadSection(theme, responsive, videoProvider, downloadProvider),
+                                SizedBox(height: responsive.rs(32)),
+                              ],
+
+                              // Error Message
+                              if (videoProvider.hasError)
+                                _buildErrorCard(theme, responsive, videoProvider),
+                              SizedBox(height: responsive.rs(16)),
+                            ],
+                          ),
                         ),
-                        SizedBox(height: responsive.rs(20)),
-
-                        _buildQualitySection(theme, responsive, videoProvider),
-                        SizedBox(height: responsive.rs(20)),
-
-                        _buildDownloadSection(theme, responsive, videoProvider, downloadProvider),
-                        SizedBox(height: responsive.rs(32)),
-                      ],
-
-                      // Error Message
-                      if (videoProvider.hasError)
-                        _buildErrorCard(theme, responsive, videoProvider),
+                      ),
                     ],
                   ),
                 );
