@@ -35,13 +35,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 300),
     );
 
-    // Also register a provider listener to catch share intents that arrive after
-    // the screen is created. We schedule the addListener in post-frame so context
-    // and providers are safe to use.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       try {
         final shareProvider = Provider.of<ShareIntentProvider>(context, listen: false);
         final videoProvider = Provider.of<VideoProvider>(context, listen: false);
+
+        try {
+          final last = shareProvider.lastSharedUrl;
+          if (last != null && _lastProcessedSharedUrl != last) {
+            _lastProcessedSharedUrl = last;
+            if (kDebugMode) print('HomeScreen.initState: prefilling url from lastSharedUrl: $last');
+            _urlController.text = last;
+          }
+        } catch (_) {}
+
         // Listener will check for pending shared urls and handle them once
         shareProvider.addListener(() {
           if (shareProvider.isPending && shareProvider.sharedUrl != null && _lastProcessedSharedUrl != shareProvider.sharedUrl) {
@@ -51,6 +58,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             scheduleMicrotask(() {
               _handleSharedUrl(shareProvider.sharedUrl!, videoProvider, shareProvider);
             });
+          } else {
+            try {
+              final last = shareProvider.lastSharedUrl;
+              if (last != null && _lastProcessedSharedUrl != last) {
+                if (kDebugMode) print('HomeScreen.shareListener: prefilling from lastSharedUrl: $last');
+                _lastProcessedSharedUrl = last;
+                _urlController.text = last;
+              }
+            } catch (_) {}
           }
         });
       } catch (e) {
@@ -63,8 +79,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void dispose() {
     _urlController.dispose();
     _animController.dispose();
-
-    // nothing extra to dispose for share handling; we track last processed URL
 
     super.dispose();
   }
@@ -389,10 +403,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildQualitySection(ThemeData theme, Responsive responsive, VideoProvider videoProvider) {
-    final qualities = videoProvider.isAudioOnly
-        ? videoProvider.currentVideo!.audioQualities
-        : videoProvider.currentVideo!.qualities;
-
     return Card(
       child: Padding(
         padding: responsive.cardPadding,
@@ -446,14 +456,144 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             _buildMediaToggle(theme, responsive, videoProvider),
             SizedBox(height: responsive.rs(16)),
 
-            // Quality Options
-            if (videoProvider.isAudioOnly)
-              // Use fixed MP3 quality options (32-320 kbps)
-              ...videoProvider.audioQualityOptions.map((q) => _buildAudioQualityTile(theme, responsive, videoProvider, q))
-            else
-              ...videoProvider.currentVideo!.qualities.map((q) => _buildVideoQualityTile(theme, responsive, videoProvider, q)),
+            // Dropdown selector which renders tile-like children
+            _buildQualityDropdown(theme, responsive, videoProvider),
           ],
         ),
+      ),
+    );
+  }
+
+  // Build the dropdown that shows quality options. Each dropdown item uses the
+  // same tile-like visuals (non-interactive) to match previous UI.
+  Widget _buildQualityDropdown(ThemeData theme, Responsive responsive, VideoProvider videoProvider) {
+    final isAudio = videoProvider.isAudioOnly;
+    final options = isAudio ? videoProvider.audioQualityOptions : videoProvider.currentVideo!.qualities;
+    final selectedValue = isAudio ? videoProvider.selectedAudioQuality : videoProvider.selectedQuality;
+
+    // Small selector box that opens a bottom sheet with the full tile list.
+    return InkWell(
+      onTap: () {
+        showModalBottomSheet(
+          context: context,
+          isScrollControlled: true,
+          backgroundColor: Colors.transparent,
+          builder: (ctx) {
+            final maxHeight = MediaQuery.of(ctx).size.height * 0.75;// allow up to 75% of screen
+            return DraggableScrollableSheet(
+              expand: false,
+              initialChildSize: 0.5,
+              minChildSize: 0.25,
+              maxChildSize: 0.9,
+              builder: (_, controller) {
+                return Container(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surface,
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(responsive.rs(16))),
+                    border: Border.all(color: theme.colorScheme.outline),
+                  ),
+                  padding: EdgeInsets.all(responsive.rs(12)),
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 4,
+                        margin: EdgeInsets.only(bottom: responsive.rs(8)),
+                        decoration: BoxDecoration(color: theme.colorScheme.onSurface.withOpacity(0.2), borderRadius: BorderRadius.circular(2)),
+                      ),
+                      Padding(
+                        padding: EdgeInsets.symmetric(vertical: responsive.rs(8)),
+                        child: Row(
+                          children: [
+                            Expanded(child: Text(context.tr('home.select_quality'), style: TextStyle(fontSize: responsive.sp(16), fontWeight: FontWeight.w600))),
+                            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text('Close')),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: ListView.builder(
+                          controller: controller,
+                          itemCount: options.length,
+                          itemBuilder: (c, i) {
+                            final opt = options[i];
+                            final key = isAudio ? (opt as dynamic).bitrate as String : (opt as dynamic).resolution as String;
+                            final isSelected = key == selectedValue;
+                            return Padding(
+                              padding: EdgeInsets.symmetric(vertical: responsive.rs(6)),
+                              child: InkWell(
+                                onTap: () {
+                                  if (isAudio) {
+                                    videoProvider.setAudioQuality(key);
+                                  } else {
+                                    videoProvider.setQuality(key);
+                                  }
+                                  Navigator.of(ctx).pop();
+                                },
+                                child: _qualityTileWidget(theme, responsive, opt, isSelected: isSelected, isAudio: isAudio),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: responsive.rs(12), vertical: responsive.rs(14)),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.background,
+          borderRadius: BorderRadius.circular(responsive.rs(12)),
+          border: Border.all(color: theme.colorScheme.outline),
+        ),
+        child: Row(
+          children: [
+            Expanded(child: Text(selectedValue, style: TextStyle(fontSize: responsive.sp(14), color: theme.colorScheme.onSurface))),
+            Icon(Icons.arrow_drop_down_rounded, color: theme.colorScheme.onSurface),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Non-interactive tile used inside dropdown items so visual style remains the same
+  Widget _qualityTileWidget(ThemeData theme, Responsive responsive, dynamic opt, {required bool isSelected, required bool isAudio}) {
+    // opt may be QualityOption or AudioQualityOption
+    final title = isAudio ? (opt.bitrate ?? '') : (opt.resolution ?? '');
+    final subtitle = isAudio ? (opt.label ?? '') : (opt.label ?? '');
+    final sizeText = opt.formattedSize ?? '';
+
+    return Container(
+      padding: EdgeInsets.all(responsive.rs(12)),
+      decoration: BoxDecoration(
+        color: isSelected ? theme.colorScheme.primary.withOpacity(0.1) : theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(responsive.rs(12)),
+        border: Border.all(color: isSelected ? theme.colorScheme.primary : theme.colorScheme.outline, width: isSelected ? 2 : 1),
+      ),
+      child: Row(
+        children: [
+          _buildRadio(theme, responsive, isSelected),
+          SizedBox(width: responsive.rs(12)),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(fontWeight: FontWeight.w700, fontSize: responsive.sp(15), color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurface)),
+                SizedBox(height: responsive.rs(4)),
+                Text(subtitle, style: TextStyle(fontSize: responsive.sp(12), color: theme.colorScheme.onSurface.withOpacity(0.6))),
+              ],
+            ),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: responsive.rs(10), vertical: responsive.rs(5)),
+            decoration: BoxDecoration(color: theme.colorScheme.secondary.withOpacity(0.1), borderRadius: BorderRadius.circular(responsive.rs(8))),
+            child: Text(sizeText, style: TextStyle(fontSize: responsive.sp(12), fontWeight: FontWeight.w700, color: theme.colorScheme.secondary)),
+          ),
+        ],
       ),
     );
   }

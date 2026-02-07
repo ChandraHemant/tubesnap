@@ -146,7 +146,7 @@ class _MainScreenState extends State<MainScreen> {
     return Consumer<AudioPlayerProvider>(
       builder: (context, audioProvider, child) {
         return WillPopScope(
-          onWillPop: () async => false,
+          onWillPop: () => _onWillPop(context),
           child: Scaffold(
             body: Stack(
               children: [
@@ -308,5 +308,32 @@ class _MainScreenState extends State<MainScreen> {
         ),
       ),
     );
+  }
+
+  Future<bool> _onWillPop(BuildContext context) async {
+    // Show confirmation dialog to exit app
+    final theme = Theme.of(context);
+    final responsive = Responsive(context);
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Text(context.tr('confirm.exit_title') ?? 'Exit'),
+          content: Text(context.tr('confirm.exit_message') ?? 'Do you really want to exit the app?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: Text(context.tr('common.no') ?? 'No'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(context.tr('common.yes') ?? 'Yes'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return result == true;
   }
 }

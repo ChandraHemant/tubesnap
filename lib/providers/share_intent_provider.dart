@@ -31,12 +31,18 @@ class ShareIntentProvider extends ChangeNotifier {
   }
 
   String? _sharedUrl;
+  /// Last received shared URL (kept until explicitly cleared). This allows UI
+  /// screens that mount after processing to still read and show the received link
+  /// in e.g. an input field. Use `clearSharedContent` to fully clear it.
+  String? _lastReceivedSharedUrl;
   String? _sharedText;
   bool _isPending = false;
   bool _isProcessing = false;
 
   // Getters
   String? get sharedUrl => _sharedUrl;
+  /// Returns the last received shared URL regardless of pending state.
+  String? get lastSharedUrl => _lastReceivedSharedUrl;
   String? get sharedText => _sharedText;
   bool get isPending => _isPending;
   bool get isProcessing => _isProcessing;
@@ -117,6 +123,11 @@ class ShareIntentProvider extends ChangeNotifier {
             final v = extras['text'];
             if (v is String && v.isNotEmpty) text = text ?? v;
           }
+          // EXTRA_STREAM might contain a Uri string
+          if (extras.containsKey('android.intent.extra.STREAM')) {
+            final stream = extras['android.intent.extra.STREAM'];
+            if (stream is String && stream.isNotEmpty) data = data ?? stream;
+          }
         }
       }
     } catch (_) {}
@@ -133,21 +144,41 @@ class ShareIntentProvider extends ChangeNotifier {
 
     // Try clipData (Intent.clipData) -> itemAt(0) -> text or uri
     try {
-      final clip = receivedIntent.clipData;
+      final clip = receivedIntent.clipData ?? receivedIntent.clip;
       if (clip != null) {
         try {
-          // many wrappers expose getItemAt(index)
-          final item = clip.getItemAt(0);
+          // many wrappers expose getItemAt(index) or getItem
+          dynamic item;
+          if (clip.getItemAt != null) {
+            item = clip.getItemAt(0);
+          } else if (clip.getItem != null) {
+            item = clip.getItem(0);
+          } else if (clip.itemCount != null && clip.itemCount > 0) {
+            try {
+              item = clip.getItemAt(0);
+            } catch (_) {}
+          }
+
           if (item != null) {
             try {
               final itemText = item.text;
               if (itemText is String && itemText.isNotEmpty) text = text ?? itemText;
             } catch (_) {}
             try {
-              final uri = item.uri;
+              final uri = item.uri ?? item.getUri?.call();
               if (uri is String && uri.isNotEmpty) data = data ?? uri;
             } catch (_) {}
           }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    // EXTRA_STREAM fallback
+    try {
+      if (receivedIntent.getParcelableExtra != null) {
+        try {
+          final streamExtra = receivedIntent.getParcelableExtra('android.intent.extra.STREAM');
+          if (streamExtra is String && streamExtra.isNotEmpty) data = data ?? streamExtra;
         } catch (_) {}
       }
     } catch (_) {}
@@ -190,6 +221,7 @@ class ShareIntentProvider extends ChangeNotifier {
 
     if (url != null && _isValidYoutubeUrl(url)) {
       _sharedUrl = url;
+      _lastReceivedSharedUrl = url;
       _sharedText = text;
       _isPending = true;
       _isProcessing = false;
@@ -215,7 +247,7 @@ class ShareIntentProvider extends ChangeNotifier {
   String? _extractUrlFromText(String text) {
     // Match YouTube URLs
     final urlRegex = RegExp(
-      r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})',
+      r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})',
     );
     final match = urlRegex.firstMatch(text);
     if (match != null) {
@@ -234,14 +266,15 @@ class ShareIntentProvider extends ChangeNotifier {
   bool _isValidYoutubeUrl(String url) {
     return url.contains('youtube.com') ||
         url.contains('youtu.be') ||
-        url.contains('m.youtube.com');
+        url.contains('m.youtube.com') ||
+        url.contains('music.youtube.com');
   }
 
   /// Mark share intent as processed
   void markAsProcessed() {
+    // Mark as processed but keep last received URL available for UI prefill.
     _isPending = false;
-    _sharedUrl = null;
-    _sharedText = null;
+    _isProcessing = false;
     notifyListeners();
   }
 
@@ -255,6 +288,7 @@ class ShareIntentProvider extends ChangeNotifier {
   void clearSharedContent() {
     _sharedUrl = null;
     _sharedText = null;
+    _lastReceivedSharedUrl = null;
     _isPending = false;
     _isProcessing = false;
     notifyListeners();

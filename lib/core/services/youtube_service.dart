@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import '../../models/video_model.dart';
 import '../../models/quality_model.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 
 /// YouTube Service - Real implementation using youtube_explode_dart
 /// Provides methods to fetch video metadata and stream manifests,
@@ -57,13 +59,68 @@ class YouTubeService {
     return null;
   }
 
+  // Helper to extract kbps from various stream objects safely
+  int _getStreamKbps(dynamic s) {
+    try {
+      final b = s.bitrate;
+      if (b != null) {
+        try {
+          // bitsPerSecond is common
+          final bps = b.bitsPerSecond ?? b.bitRate ?? b.bitrate;
+          if (bps is int) return (bps ~/ 1000);
+        } catch (_) {}
+        try {
+          final kb = b.kbps;
+          if (kb is int) return kb;
+        } catch (_) {}
+      }
+      // Try other common fallbacks
+      try {
+        final avg = s.averageBitrate;
+        if (avg is int) return (avg ~/ 1000);
+      } catch (_) {}
+      try {
+        final kb2 = s.bitrateKbps;
+        if (kb2 is int) return kb2;
+      } catch (_) {}
+    } catch (_) {}
+    return 0;
+  }
+
+  // Helper to extract resolution label from stream safely
+  String _extractResolution(dynamic s) {
+    if (s == null) return '';
+    try {
+      final q = s.qualityLabel;
+      if (q != null) return q.toString();
+    } catch (_) {}
+    try {
+      final vq = s.videoQuality;
+      if (vq != null) {
+        try {
+          final lab = vq.label;
+          if (lab != null) return lab.toString();
+        } catch (_) {}
+        try {
+          final h = vq.height;
+          if (h != null) return '${h}p';
+        } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      final h2 = s.height ?? s.resolutionHeight;
+      if (h2 != null) return '${h2}p';
+    } catch (_) {}
+    return '';
+  }
+
   /// Fetch video information and available qualities/audio streams
   /// Throws [YouTubeException] on failure.
   Future<VideoInfo> fetchVideoInfo(String url) async {
-    if (!isValidUrl(url)) throw YouTubeException('Invalid YouTube URL');
+    if (!isValidUrl(url)) throw YouTubeServiceException('Invalid YouTube URL');
 
     final videoId = extractVideoId(url);
-    if (videoId == null) throw YouTubeException('Could not extract video ID');
+    if (videoId == null) throw YouTubeServiceException('Could not extract video ID');
 
     dynamic video;
     dynamic manifest;
@@ -158,32 +215,6 @@ class YouTubeService {
             try { final s = t.standardResUrl; if (s != null) return s.toString(); } catch (_) {}
             try { final any = t.first; if (any != null) return any.toString(); } catch (_) {}
           }
-        } catch (_) {}
-        return '';
-      }
-
-      String _extractResolution(dynamic s) {
-        if (s == null) return '';
-        try {
-          final q = s.qualityLabel;
-          if (q != null) return q.toString();
-        } catch (_) {}
-        try {
-          final vq = s.videoQuality;
-          if (vq != null) {
-            try {
-              final lab = vq.label;
-              if (lab != null) return lab.toString();
-            } catch (_) {}
-            try {
-              final h = vq.height;
-              if (h != null) return '${h}p';
-            } catch (_) {}
-          }
-        } catch (_) {}
-        try {
-          final h2 = s.height ?? s.resolutionHeight;
-          if (h2 != null) return '${h2}p';
         } catch (_) {}
         return '';
       }
@@ -313,6 +344,55 @@ class YouTubeService {
         return bRes.compareTo(aRes); // Descending order
       });
 
+      // Ensure a MAX (Maximum Quality / No Compression) option is present and points to the highest available stream.
+      try {
+        final hasMax = qualities.any((q) => q.resolution == 'MAX');
+        if (!hasMax && qualities.isNotEmpty) {
+          // Determine top stream and its URL
+          String topUrl = '';
+          String topExt = qualities.first.extension;
+          int topSize = qualities.first.fileSize;
+          // Prefer highest video-only stream
+          if (videoOnly.isNotEmpty) {
+            final vlist = videoOnly.toList();
+            vlist.sort((a, b) {
+              final ah = int.tryParse(_extractResolution(a).replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              final bh = int.tryParse(_extractResolution(b).replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              return bh.compareTo(ah);
+            });
+            final top = vlist.first;
+            try { topUrl = _extractUrl(top); } catch (_) {}
+            try { topExt = _extractCodec(top).toLowerCase().contains('vp9') || _extractCodec(top).toLowerCase().contains('vp8') ? 'webm' : topExt; } catch (_) {}
+            try { topSize = _extractSize(top); } catch (_) {}
+          } else if (muxed.isNotEmpty) {
+            final mlist = muxed.toList();
+            mlist.sort((a, b) {
+              final ah = int.tryParse((a.qualityLabel ?? '').replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              final bh = int.tryParse((b.qualityLabel ?? '').replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              return bh.compareTo(ah);
+            });
+            final top = mlist.first;
+            try { topUrl = _extractUrl(top); } catch (_) {}
+            try { topExt = _extractCodec(top).toLowerCase().contains('vp9') || _extractCodec(top).toLowerCase().contains('vp8') ? 'webm' : topExt; } catch (_) {}
+            try { topSize = _extractSize(top); } catch (_) {}
+          }
+
+          final estimatedSize = topSize > 0 ? (topSize * 1.1).toInt() : (2000 * 1024 * 1024);
+          final maxOption = QualityOption(
+            resolution: 'MAX',
+            label: 'Maximum Quality (No Compression)',
+            labelHi: 'अधिकतम गुणवत्ता (कोई संपीड़न नहीं)',
+            fileSize: estimatedSize,
+            extension: topExt,
+            downloadUrl: topUrl,
+            bitrate: qualities.first.bitrate,
+            fps: qualities.first.fps,
+            codec: qualities.first.codec,
+          );
+          qualities.insert(0, maxOption);
+        }
+      } catch (_) {}
+
       debugPrint('fetchVideoInfo: Total ${qualities.length} qualities available');
       for (final q in qualities) {
         debugPrint('  - ${q.resolution} (${q.codec}, ${q.fps}fps, ${(q.fileSize / 1024 / 1024).toStringAsFixed(1)}MB)');
@@ -399,14 +479,14 @@ class YouTubeService {
         debugPrint('--- END DEBUG ---');
       } catch (_) {}
 
-      throw YouTubeException('Failed to fetch video: ${e.toString()}');
+      throw YouTubeServiceException('Failed to fetch video: ${e.toString()}');
     }
   }
 
   /// Download a stream by URL
   /// Writes to [targetFile] and reports progress via [onProgress]
   /// If [cancelToken] is canceled the partial file will be removed and an exception thrown.
-  Future<void> downloadStream({
+  Future<String> downloadStream({
     required String videoId,
     required String streamUrl,
     required File targetFile,
@@ -471,44 +551,159 @@ class YouTubeService {
       }
 
       if (chosen == null) {
-        throw YouTubeException('No streams available');
+        throw YouTubeServiceException('No streams available');
       }
 
       debugPrint('  Selected: $chosenInfo (${chosen.size.totalBytes} bytes)');
 
-      final stream = _yt.videos.streamsClient.get(chosen);
-      final total = chosen.size.totalBytes;
-      int downloaded = 0;
-      final sink = targetFile.openWrite();
+      // If chosen is video-only, download a matching audio stream and mux them
+      if (chosen is VideoOnlyStreamInfo) {
+        debugPrint('youtube_service: chosen stream is video-only; will download audio and mux');
 
-      try {
-        await for (final chunk in stream) {
-          if (cancelToken?.isCanceled == true) {
-            await sink.flush();
-            await sink.close();
-            if (await targetFile.exists()) await targetFile.delete();
-            throw YouTubeException('Download cancelled');
-          }
-          downloaded += chunk.length;
-          sink.add(chunk);
-          if (onProgress != null) onProgress(downloaded, total);
+        // Pick best audio-only stream (highest bitrate)
+        AudioOnlyStreamInfo? bestAudio;
+        try {
+          final audioList = manifest.audioOnly.toList();
+          audioList.sort((a, b) {
+            final aRate = _getStreamKbps(a);
+            final bRate = _getStreamKbps(b);
+            return bRate.compareTo(aRate);
+          });
+          if (audioList.isNotEmpty) bestAudio = audioList.first;
+        } catch (_) {}
+
+        if (bestAudio == null) {
+          throw YouTubeServiceException('No audio stream available to mux with video-only stream');
         }
 
-        await sink.flush();
-        await sink.close();
+        // Prepare temp files
+        final tmpDir = targetFile.parent;
+        final videoTmp = File('${tmpDir.path}/${DateTime.now().millisecondsSinceEpoch}_video.tmp');
+        final audioTmp = File('${tmpDir.path}/${DateTime.now().millisecondsSinceEpoch}_audio.tmp');
 
-        final finalSize = await targetFile.length();
-        debugPrint('youtube_service: Done - $finalSize bytes');
+        // Download video-only to videoTmp
+        final videoStream = _yt.videos.streamsClient.get(chosen);
+        final videoSink = videoTmp.openWrite();
+        int videoDownloaded = 0;
+        final videoTotal = chosen.size.totalBytes;
+        try {
+          await for (final chunk in videoStream) {
+            if (cancelToken?.isCanceled == true) {
+              await videoSink.flush();
+              await videoSink.close();
+              if (await videoTmp.exists()) await videoTmp.delete();
+              if (await audioTmp.exists()) await audioTmp.delete();
+              throw YouTubeServiceException('Download cancelled');
+            }
+            videoDownloaded += chunk.length;
+            videoSink.add(chunk);
+            // Combine progress: video contributes first 60%
+            if (onProgress != null) {
+              final p = videoTotal > 0 ? (videoDownloaded / videoTotal) * 0.6 : 0.0;
+              onProgress((p * videoTotal).toInt(), (videoTotal + (bestAudio.size.totalBytes)));
+            }
+          }
+          await videoSink.flush();
+          await videoSink.close();
+        } catch (e) {
+          try { await videoSink.close(); } catch (_) {}
+          rethrow;
+        }
 
-        if (finalSize == 0) throw YouTubeException('Downloaded file is empty');
-      } catch (e) {
-        try { await sink.close(); } catch (_) {}
-        rethrow;
+        // Download audio-only to audioTmp
+        final audioStream = _yt.videos.streamsClient.get(bestAudio);
+        final audioSink = audioTmp.openWrite();
+        int audioDownloaded = 0;
+        final audioTotal = bestAudio.size.totalBytes;
+        try {
+          await for (final chunk in audioStream) {
+            if (cancelToken?.isCanceled == true) {
+              await audioSink.flush();
+              await audioSink.close();
+              if (await videoTmp.exists()) await videoTmp.delete();
+              if (await audioTmp.exists()) await audioTmp.delete();
+              throw YouTubeServiceException('Download cancelled');
+            }
+            audioDownloaded += chunk.length;
+            audioSink.add(chunk);
+            // Audio contributes remaining 40%
+            if (onProgress != null) {
+              final vp = videoTotal > 0 ? (videoDownloaded / videoTotal) * 0.6 : 0.6;
+              final ap = audioTotal > 0 ? (audioDownloaded / audioTotal) * 0.4 : 0.0;
+              final overall = vp + ap;
+              onProgress((overall * (videoTotal + audioTotal)).toInt(), (videoTotal + audioTotal));
+            }
+          }
+          await audioSink.flush();
+          await audioSink.close();
+        } catch (e) {
+          try { await audioSink.close(); } catch (_) {}
+          // Clean up partial video file
+          try { if (await videoTmp.exists()) await videoTmp.delete(); } catch (_) {}
+          rethrow;
+        }
+
+        // Mux using ffmpeg (copy codecs - no re-encoding, preserve original quality)
+        // Ensure output container matches video extension to avoid container incompatibilities
+        final outputPath = targetFile.path;
+        final cmd = '-i "${videoTmp.path}" -i "${audioTmp.path}" -c:v copy -c:a copy -y "$outputPath"';
+        debugPrint('youtube_service: muxing with ffmpeg (COPY MODE - NO RE-ENCODING): $cmd');
+        final session = await FFmpegKit.execute(cmd);
+        final rc = await session.getReturnCode();
+        if (ReturnCode.isSuccess(rc)) {
+          // Clean temp files
+          try { if (await videoTmp.exists()) await videoTmp.delete(); } catch (_) {}
+          try { if (await audioTmp.exists()) await audioTmp.delete(); } catch (_) {}
+          final finalSize = await targetFile.length();
+          debugPrint('youtube_service: Mux successful - $finalSize bytes');
+          if (finalSize == 0) throw YouTubeServiceException('Muxed file is empty');
+          return targetFile.path;
+        } else {
+          final output = await session.getOutput();
+          debugPrint('youtube_service: FFmpeg mux failed: $output');
+          // cleanup
+          try { if (await videoTmp.exists()) await videoTmp.delete(); } catch (_) {}
+          try { if (await audioTmp.exists()) await audioTmp.delete(); } catch (_) {}
+          throw YouTubeServiceException('Failed to mux audio and video: $output');
+        }
+      } else {
+        final stream = _yt.videos.streamsClient.get(chosen);
+        final total = chosen.size.totalBytes;
+        int downloaded = 0;
+        final sink = targetFile.openWrite();
+
+        try {
+          await for (final chunk in stream) {
+            if (cancelToken?.isCanceled == true) {
+              await sink.flush();
+              await sink.close();
+              if (await targetFile.exists()) await targetFile.delete();
+              throw YouTubeServiceException('Download cancelled');
+            }
+            downloaded += chunk.length;
+            sink.add(chunk);
+            if (onProgress != null) onProgress(downloaded, total);
+          }
+
+          await sink.flush();
+          await sink.close();
+
+          final finalSize = await targetFile.length();
+          debugPrint('youtube_service: Done - $finalSize bytes');
+
+          if (finalSize == 0) throw YouTubeServiceException('Downloaded file is empty');
+          return targetFile.path;
+        } catch (e) {
+          try { await sink.close(); } catch (_) {}
+          rethrow;
+        }
       }
     } catch (e) {
       debugPrint('youtube_service.downloadStream ERROR: $e');
       rethrow;
     }
+    // Should never reach here, but Dart needs a return type on all paths.
+    return targetFile.path;
   }
 
   /// Get video thumbnail URL
@@ -529,7 +724,7 @@ class YouTubeService {
   }
 
   /// Resolve a usable stream URL for a video by matching resolution or bitrate.
-  Future<String?> resolveStreamUrl(String videoId, {String? resolution, int? bitrateKbps, bool audioOnly = false}) async {
+   Future<String?> resolveStreamUrl(String videoId, {String? resolution, int? bitrateKbps, bool audioOnly = false, String? preferredStreamUrl}) async {
     try {
       debugPrint('youtube_service.resolveStreamUrl: videoId=$videoId, resolution=$resolution, bitrate=$bitrateKbps, audioOnly=$audioOnly');
 
@@ -540,11 +735,41 @@ class YouTubeService {
         candidates.addAll(manifest.audioOnly);
         debugPrint('  Audio-only streams available: ${manifest.audioOnly.length}');
       } else {
-        // Prefer muxed streams (has audio), then video-only for higher qualities
-        candidates.addAll(manifest.muxed);
+        // Prefer video-only streams (higher quality) then muxed streams.
         candidates.addAll(manifest.videoOnly);
-        debugPrint('  Muxed streams available: ${manifest.muxed.length}');
+        candidates.addAll(manifest.muxed);
         debugPrint('  Video-only streams available: ${manifest.videoOnly.length}');
+        debugPrint('  Muxed streams available: ${manifest.muxed.length}');
+      }
+
+      // If a preferredStreamUrl is provided (from earlier manifest parsing), try to match it first.
+      if (preferredStreamUrl != null && preferredStreamUrl.isNotEmpty) {
+        try {
+          debugPrint('  Trying to match preferredStreamUrl from cached QualityOption...');
+          for (final s in candidates) {
+            try {
+              final u = s.url?.toString() ?? s.uri?.toString() ?? s.downloadUrl?.toString();
+              if (u != null && u.isNotEmpty) {
+                // Prefer exact match first, then contains
+                if (u == preferredStreamUrl) {
+                  debugPrint('  ✓ Preferred URL exact match found');
+                  return u.toString();
+                }
+              }
+            } catch (_) {}
+          }
+          // If exact not found, try contains
+          for (final s in candidates) {
+            try {
+              final u = s.url?.toString() ?? s.uri?.toString() ?? s.downloadUrl?.toString();
+              if (u != null && u.isNotEmpty && u.contains(preferredStreamUrl)) {
+                debugPrint('  ✓ Preferred URL partial match found');
+                return u.toString();
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+        debugPrint('  Preferred URL not found in manifest, falling back to resolution/bitrate heuristics');
       }
 
       if (candidates.isEmpty) {
@@ -552,9 +777,63 @@ class YouTubeService {
         return null;
       }
 
+      // Special handling for "MAX" quality - pick the HIGHEST resolution stream available
+      if (resolution == 'MAX') {
+        debugPrint('  🎬 MAXIMUM QUALITY MODE: Selecting highest resolution stream without compression...');
+        if (!audioOnly) {
+          // For video, prefer video-only streams (higher quality) then muxed
+          final videoOnlyList = manifest.videoOnly.toList();
+          if (videoOnlyList.isNotEmpty) {
+            // Sort by resolution (highest first)
+            videoOnlyList.sort((a, b) {
+              final aHeight = int.tryParse(_extractResolution(a).replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              final bHeight = int.tryParse(_extractResolution(b).replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              return bHeight.compareTo(aHeight);
+            });
+            final highest = videoOnlyList.first;
+            final url = highest.url.toString();
+            if (url.isNotEmpty) {
+              final label = _extractResolution(highest);
+              debugPrint('  ✓ Selected MAXIMUM: $label (video-only, highest available)');
+              return url;
+            }
+          }
+          // Fallback to muxed if no video-only
+          if (manifest.muxed.isNotEmpty) {
+            final muxedList = manifest.muxed.toList();
+            muxedList.sort((a, b) {
+              final aHeight = int.tryParse(a.qualityLabel.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              final bHeight = int.tryParse(b.qualityLabel.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+              return bHeight.compareTo(aHeight);
+            });
+            final highest = muxedList.first;
+            final url = highest.url.toString();
+            debugPrint('  ✓ Selected MAXIMUM: ${highest.qualityLabel} (muxed, highest available)');
+            return url;
+          }
+        } else {
+          // For audio, pick highest bitrate
+          final audioList = manifest.audioOnly.toList();
+          if (audioList.isNotEmpty) {
+            audioList.sort((a, b) {
+              final aKbps = _getStreamKbps(a);
+              final bKbps = _getStreamKbps(b);
+              return bKbps.compareTo(aKbps);
+            });
+            final highest = audioList.first;
+            final url = highest.url.toString();
+            if (url.isNotEmpty) {
+              final kbps = _getStreamKbps(highest);
+              debugPrint('  ✓ Selected MAXIMUM audio: ${kbps}kbps (highest available)');
+              return url;
+            }
+          }
+        }
+      }
+
       // Extract target resolution number (e.g., "720p" -> 720, "1080p60" -> 1080)
       int? targetHeight;
-      if (resolution != null && resolution.isNotEmpty) {
+      if (resolution != null && resolution.isNotEmpty && resolution != 'MAX') {
         final match = RegExp(r'(\d+)p').firstMatch(resolution);
         if (match != null) {
           targetHeight = int.tryParse(match.group(1)!);
@@ -562,6 +841,45 @@ class YouTubeService {
       }
 
       debugPrint('  Target height: $targetHeight');
+
+      // Quick pass: if we have a numeric targetHeight, prefer video-only streams
+      // that match the resolution label, then fallback to muxed streams.
+      if (targetHeight != null) {
+        try {
+          final resStr = '${targetHeight}p';
+          // Check video-only streams first (prefer higher quality video-only)
+          try {
+            for (final s in manifest.videoOnly) {
+              try {
+                final qlabel = (_extractResolution(s))?.toString() ?? '';
+                if (qlabel.isNotEmpty && qlabel.contains(resStr)) {
+                  final u = s.url?.toString();
+                  if (u != null && u.isNotEmpty) {
+                    debugPrint('  Quick-match (video-only) by label: $qlabel -> using this stream');
+                    return u.toString();
+                  }
+                }
+              } catch (_) {}
+            }
+          } catch (_) {}
+
+          // Then check muxed streams
+          try {
+            for (final s in manifest.muxed) {
+              try {
+                final qlabel = (s.qualityLabel ?? s.videoQuality?.name ?? '')?.toString() ?? '';
+                if (qlabel.isNotEmpty && qlabel.contains(resStr)) {
+                  final u = s.url?.toString();
+                  if (u != null && u.isNotEmpty) {
+                    debugPrint('  Quick-match (muxed) by label: $qlabel -> using this stream');
+                    return u.toString();
+                  }
+                }
+              } catch (_) {}
+            }
+          } catch (_) {}
+        } catch (_) {}
+      }
 
       // Score streams by closeness to target resolution
       dynamic bestMatch;
@@ -607,23 +925,16 @@ class YouTubeService {
           } else {
             // For video, match by resolution height
             if (targetHeight != null && streamHeight > 0) {
-              // Exact match gets highest score
-              if (streamHeight == targetHeight) {
-                final score = 100000 + streamHeight;
-                if (score > bestScore) {
-                  bestScore = score;
-                  bestMatch = s;
-                  bestLabel = qlabel;
-                  debugPrint('  Found EXACT match: $qlabel (height=$streamHeight)');
-                }
-              } else if (streamHeight <= targetHeight) {
-                // Prefer closest lower resolution
-                final score = streamHeight;
-                if (score > bestScore) {
-                  bestScore = score;
-                  bestMatch = s;
-                  bestLabel = qlabel;
-                }
+              // Score by closeness to targetHeight (smaller diff is better).
+              // Add small bonus if streamHeight >= targetHeight so we prefer equal/higher when available.
+              final diff = (streamHeight - targetHeight).abs();
+              final bonus = streamHeight >= targetHeight ? 1000 : 0;
+              final score = 100000 - (diff * 10) + bonus + streamHeight;
+              if (score > bestScore) {
+                bestScore = score.toInt();
+                bestMatch = s;
+                bestLabel = qlabel;
+                if (diff == 0) debugPrint('  Found EXACT match: $qlabel (height=$streamHeight)');
               }
             } else if (streamHeight > 0) {
               // No target, prefer highest quality
@@ -685,6 +996,28 @@ class YouTubeService {
     return null;
   }
 
+  /// Find a StreamInfo object matching the given stream URL for a video.
+  /// Returns null if not found.
+  Future<StreamInfo?> findStreamByUrl(String videoId, String streamUrl) async {
+    try {
+      final manifest = await _yt.videos.streamsClient.getManifest(videoId);
+      final List<StreamInfo> all = [
+        ...manifest.muxed,
+        ...manifest.videoOnly,
+        ...manifest.audioOnly,
+      ];
+      for (final s in all) {
+        try {
+          final u = s.url?.toString() ?? '';
+          if (u == streamUrl) return s;
+        } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('findStreamByUrl failed: $e');
+    }
+    return null;
+  }
+
   /// Close underlying client - call on app exit to free resources
   void dispose() => _yt.close();
 }
@@ -705,11 +1038,16 @@ class CancelToken {
   void cancel() => _cancelled = true;
 }
 
-/// YouTube exception
-class YouTubeException implements Exception {
+/// YouTube service exception
+class YouTubeServiceException implements Exception {
   final String message;
-  YouTubeException(this.message);
+  YouTubeServiceException(this.message);
 
   @override
   String toString() => message;
+}
+
+/// Backward compatible alias for code that expects `YouTubeException`.
+class YouTubeException extends YouTubeServiceException {
+  YouTubeException(String message) : super(message);
 }

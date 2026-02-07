@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:tubesnap/models/quality_model.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 import '../../models/download_model.dart';
 import '../../models/video_model.dart';
@@ -168,8 +169,10 @@ class DownloadService {
 
       String? streamUrl;
       try {
-        // Try to resolve by resolution first
-        streamUrl = await YouTubeService().resolveStreamUrl(task.videoId, resolution: task.quality);
+        // Use preferred stream URL if the QualityOption includes one (to ensure exact match)
+        final preferred = (task.downloadUrl.isNotEmpty) ? task.downloadUrl : null;
+        // Try to resolve by resolution first, preferring the stored downloadUrl
+        streamUrl = await YouTubeService().resolveStreamUrl(task.videoId, resolution: task.quality, preferredStreamUrl: preferred);
 
         if (streamUrl == null || streamUrl.isEmpty) {
           // Try audio-only if quality looks like bitrate (e.g., "320kbps")
@@ -180,7 +183,7 @@ class DownloadService {
           } catch (_) {}
 
           if (kbps != null) {
-            streamUrl = await YouTubeService().resolveStreamUrl(task.videoId, bitrateKbps: kbps, audioOnly: true);
+            streamUrl = await YouTubeService().resolveStreamUrl(task.videoId, bitrateKbps: kbps, audioOnly: true, preferredStreamUrl: preferred);
           }
         }
 
@@ -188,21 +191,44 @@ class DownloadService {
           debugPrint('DownloadService: ✓ Resolved stream URL (${streamUrl.length} chars)');
           debugPrint('  URL preview: ${streamUrl.substring(0, streamUrl.length > 80 ? 80 : streamUrl.length)}...');
         }
-      } catch (e, st) {
+      } catch (e) {
         debugPrint('DownloadService: ✗ Failed to resolve stream URL: $e');
-        debugPrint('Stack trace: $st');
-        throw YouTubeException('Could not resolve stream URL: $e');
+        throw YouTubeServiceException('Could not resolve stream URL: $e');
       }
 
       if (streamUrl == null || streamUrl.isEmpty) {
-        throw YouTubeException('No stream URL available. Video might be unavailable or quality not supported.');
+        throw YouTubeServiceException('No stream URL available. Video might be unavailable or quality not supported.');
       }
 
       // Use YouTubeService to download the stream and report progress
-      await YouTubeService().downloadStream(
+      String savedPath = task.filePath;
+      // Detect stream info to adjust extension/container when needed
+      try {
+        final streamInfo = await YouTubeService().findStreamByUrl(task.videoId, streamUrl);
+        if (streamInfo != null) {
+          // If video-only, ensure target file has proper container extension (webm/mp4)
+          if (streamInfo is VideoOnlyStreamInfo) {
+            final codec = (streamInfo.codec ?? '').toString().toLowerCase();
+            final ext = codec.contains('vp9') || codec.contains('vp8') ? 'webm' : task.filePath.split('.').last;
+            final newPath = task.filePath.replaceAll(RegExp(r'\.[^\.]+$'), '.$ext');
+            if (newPath != task.filePath) {
+              // update file path and targetFile
+              debugPrint('DownloadService: Adjusting target file extension for video-only stream: $newPath');
+              savedPath = newPath;
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('DownloadService: could not detect stream info: $e');
+      }
+
+      final finalTargetFile = File(savedPath);
+      if (!(await finalTargetFile.parent.exists())) await finalTargetFile.parent.create(recursive: true);
+
+      final downloadedSavedPath = await YouTubeService().downloadStream(
         videoId: task.videoId,
-        streamUrl: streamUrl!,
-        targetFile: targetFile,
+        streamUrl: streamUrl,
+        targetFile: finalTargetFile,
         cancelToken: cancelToken,
         onProgress: (downloadedBytes, totalBytes) {
           // Track bytes for this task
@@ -227,10 +253,15 @@ class DownloadService {
         },
       );
 
+      // If download returned saved path, use it for verification and persistence
+      if (downloadedSavedPath != null && downloadedSavedPath.isNotEmpty) {
+        task = task.copyWith(filePath: downloadedSavedPath);
+      }
+
       // Completed - verify file then persist and emit completed only after saved
       await Future.delayed(Duration(milliseconds: 500)); // Wait for file system to sync
-      final exists = await targetFile.exists();
-      final fileLen = exists ? await targetFile.length() : 0;
+      final exists = await File(task.filePath).exists();
+      final fileLen = exists ? await File(task.filePath).length() : 0;
       final wroteBytes = _downloadedBytes[task.id] ?? 0;
 
       debugPrint('========== DOWNLOAD COMPLETION CHECK ==========');
@@ -306,7 +337,7 @@ class DownloadService {
     } catch (e) {
       debugPrint('DownloadService: task ${task.id} failed: $e');
       try {
-        debugPrint((e as Object).toString());
+        debugPrint(e.toString());
       } catch (_) {}
       // Remove active and cancel token
       _activeDownloads.remove(task.id);
@@ -486,21 +517,24 @@ class DownloadService {
       debugPrint('DownloadService: Resolving FRESH audio stream URL');
       String? streamUrl;
       try {
+        final preferred = (task.downloadUrl.isNotEmpty) ? task.downloadUrl : null;
         streamUrl = await YouTubeService().resolveStreamUrl(
           task.videoId,
           audioOnly: true,
+          bitrateKbps: null,
+          preferredStreamUrl: preferred,
         );
 
         if (streamUrl != null && streamUrl.isNotEmpty) {
           debugPrint('DownloadService: ✓ Resolved audio stream URL');
         }
-      } catch (e, st) {
+      } catch (e) {
         debugPrint('DownloadService: ✗ Failed to resolve audio stream URL: $e');
-        throw YouTubeException('Could not resolve audio stream URL: $e');
+        throw YouTubeServiceException('Could not resolve audio stream URL: $e');
       }
 
       if (streamUrl == null || streamUrl.isEmpty) {
-        throw YouTubeException('No audio stream available for download');
+        throw YouTubeServiceException('No audio stream available for download');
       }
 
       // Download audio stream to temp file (80% of progress)
@@ -565,7 +599,7 @@ class DownloadService {
       );
 
       if (!conversionSuccess) {
-        throw YouTubeException('Failed to convert audio to MP3');
+        throw YouTubeServiceException('Failed to convert audio to MP3');
       }
 
       debugPrint('DownloadService: ✓ MP3 conversion successful!');
@@ -688,3 +722,4 @@ class DownloadStatusUpdate {
     this.error,
   });
 }
+

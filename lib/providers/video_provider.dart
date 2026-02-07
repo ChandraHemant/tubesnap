@@ -85,6 +85,29 @@ class VideoProvider extends ChangeNotifier {
     try {
       _currentVideo = await _youtubeService.fetchVideoInfo(url);
 
+      // Ensure a MAX (Maximum Quality / No Compression) option is available for every video.
+      try {
+        final qualities = _currentVideo!.qualities;
+        final hasMax = qualities.any((q) => q.resolution == 'MAX');
+        if (!hasMax && qualities.isNotEmpty) {
+          // Use highest available quality as template (list is sorted highest->lowest)
+          final top = qualities.first;
+          final estimatedSize = top.fileSize > 0 ? (top.fileSize * 1.2).toInt() : (2000 * 1024 * 1024);
+          final maxOption = QualityOption(
+            resolution: 'MAX',
+            label: 'Maximum Quality (No Compression)',
+            labelHi: 'अधिकतम गुणवत्ता (कोई संपीड़न नहीं)',
+            fileSize: estimatedSize,
+            extension: top.extension,
+            downloadUrl: '',
+            bitrate: top.bitrate > 0 ? top.bitrate : 0,
+            fps: top.fps,
+            codec: top.codec,
+          );
+          qualities.insert(0, maxOption);
+        }
+      } catch (_) {}
+
       // Auto-select best available quality
       if (_currentVideo!.qualities.isNotEmpty) {
         // Try to select 1080p, fallback to first available

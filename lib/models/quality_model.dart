@@ -32,6 +32,15 @@ class QualityOption {
   /// All available qualities - ALL FREE!
   static List<QualityOption> get allQualities => [
     QualityOption(
+      resolution: 'MAX',
+      label: 'Maximum Quality (No Compression)',
+      labelHi: 'अधिकतम गुणवत्ता (कोई संपीड़न नहीं)',
+      fileSize: 2000 * 1024 * 1024, // 2 GB (estimate for highest quality)
+      bitrate: 25000,
+      fps: 60,
+      codec: 'vp9',
+    ),
+    QualityOption(
       resolution: '2160p',
       label: '4K Ultra HD',
       labelHi: '4K अल्ट्रा HD',
