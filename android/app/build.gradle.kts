@@ -49,8 +49,26 @@ android {
             isShrinkResources = false
         }
     }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            pickFirsts += "**/libc++_shared.so"
+            pickFirsts += "lib/**/libc++_shared.so"
+            keepDebugSymbols += "**/libpython.zip.so"
+            keepDebugSymbols += "**/libpython.*.so"
+        }
+    }
+}
+
+dependencies {
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.1")
+    // FFmpeg companion - provides libffmpeg.so so yt-dlp can merge video+audio streams.
+    // Without this the APK ships NO libffmpeg.so and every mux-requiring download fails
+    // with "ffmpeg-location ... does not exist".
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1")
 }
 
 flutter {
     source = "../.."
 }
+
